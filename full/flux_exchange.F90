@@ -505,6 +505,8 @@ module flux_exchange_mod
   use atm_land_ice_flux_exchange_mod, only: flux_up_to_atmos, atm_stock_integrate, send_ice_mask_sic
   use atm_land_ice_flux_exchange_mod, only: flux_atmos_to_ocean, flux_ex_arrays_dealloc
   use land_ice_flux_exchange_mod,     only: flux_land_to_ice, land_ice_flux_exchange_init
+  use atm_ice_wave_exchange_mod,          only: atm_wave_exchange_init, atm_to_wave
+  use atm_ice_wave_exchange_mod,          only: ice_wave_exchange_init, ice_to_wave
   use ice_ocean_flux_exchange_mod,    only: ice_ocean_flux_exchange_init
   use ice_ocean_flux_exchange_mod,    only: flux_ocean_to_ice, flux_ocean_to_ice_finish
   use ice_ocean_flux_exchange_mod,    only: flux_ice_to_ocean, flux_ice_to_ocean_finish
@@ -515,6 +517,7 @@ module flux_exchange_mod
   use ice_model_mod,      only: ice_data_type, land_ice_boundary_type, &
                                 ocean_ice_boundary_type, atmos_ice_boundary_type, Ice_stock_pe
   use land_model_mod,     only: land_data_type, atmos_land_boundary_type
+  use wave_type_mod,     only: wave_data_type, atmos_wave_boundary_type, ice_wave_boundary_type
   use atmos_ocean_fluxes_mod,     only: atmos_ocean_fluxes_init, atmos_ocean_type_fluxes_init
   use atmos_ocean_fluxes_calc_mod, only: atmos_ocean_fluxes_calc
   use ocean_model_mod,            only: ocean_model_init_sfc, ocean_model_flux_init
@@ -538,7 +541,9 @@ module flux_exchange_mod
      flux_init_stocks,     &
      flux_ice_to_ocean_stocks,&
      flux_ocean_from_ice_stocks,&
-     send_ice_mask_sic
+     send_ice_mask_sic,&
+     atm_to_wave,&
+     ice_to_wave
 
   !-----------------------------------------------------------------------
   character(len=128) :: version = '$Id$'
@@ -647,9 +652,9 @@ contains
   !!    The longitude from file grid_spec.nc ( from field xba ) is different from the longitude from atmosphere model.
   !! \throw FATAL, "grid_spec.nc incompatible with atmosphere latitudes (see grid_spec.nc)"
   !!    The latitude from file grid_spec.nc is different from the latitude from atmosphere model.
-  subroutine flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state,&
+  subroutine flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state, Wav, &
        atmos_ice_boundary, land_ice_atmos_boundary, &
-       land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, &
+       land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, atmos_wave_boundary, ice_wave_boundary, &
        do_ocean, slow_ice_ocean_pelist, dt_atmos, dt_cpld )
 
     type(FmsTime_type),                   intent(in)     :: Time !< The model's current time
@@ -658,6 +663,7 @@ contains
     type(ice_data_type),               intent(inout)  :: Ice !< A derived data type to specify ice boundary data
     type(ocean_public_type),           intent(inout)  :: Ocean !< A derived data type to specify ocean boundary data
     type(ocean_state_type),            pointer        :: Ocean_state
+    type(wave_data_type),              intent(inout)  :: Wav !< A derived data type to specify wave boundary data
     ! All intent(OUT) derived types with pointer components must be
     ! COMPLETELY allocated here and in subroutines called from here;
     ! NO pointer components should have been allocated before entry if the
@@ -673,6 +679,10 @@ contains
                                                                            !! and fluxes passed from ice to ocean
     type(ocean_ice_boundary_type),     intent(inout) :: ocean_ice_boundary !< A derived data type to specify properties
                                                                            !! and fluxes passed from ocean to ice
+    type(atmos_wave_boundary_type),     intent(inout) :: atmos_wave_boundary!< A derived data type to specify properties
+                                                                           !! and fluxes passed from atmosphere to wave
+    type(ice_wave_boundary_type),        intent(inout) :: ice_wave_boundary!< A derived data type to specify properties
+                                                                           !! and fluxes passed from ice to wave
     logical,                           intent(in)    :: do_ocean
     integer, dimension(:),             intent(in)    :: slow_ice_ocean_pelist
     integer, optional,                 intent(in)    :: dt_atmos !< Atmosphere time step in seconds
@@ -750,8 +760,10 @@ contains
     end if
 
     call fms_mpp_set_current_pelist()
-    call ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state,ice_ocean_boundary, ocean_ice_boundary, &
+    call ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state, Wav, ice_ocean_boundary, ocean_ice_boundary, &
          Dt_cpl, debug_stocks, do_area_weighted_flux, ex_gas_fields_ice, ex_gas_fluxes, do_ocean, slow_ice_ocean_pelist)
+    if (Wav%Waves_Is_Init) call atm_wave_exchange_init(Atm, Wav, Atmos_wave_boundary)
+    if (Wav%Waves_Is_Init) call ice_wave_exchange_init(Ice, Wav, Ice_wave_boundary)
 
     !---- done ----
     do_init = .false.

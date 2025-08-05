@@ -343,21 +343,24 @@ program coupler_main
   type (atmos_data_type), target :: Atm
   type  (land_data_type), target :: Land
   type   (ice_data_type), target :: Ice
+  type  (wave_data_type), target :: Wave
   ! allow members of ocean type to be aliased (ap)
   type (ocean_public_type), target  :: Ocean
   type (ocean_state_type),  pointer :: Ocean_state => NULL()
 
   type(atmos_land_boundary_type), target :: Atmos_land_boundary
   type(atmos_ice_boundary_type), target  :: Atmos_ice_boundary
+  type(atmos_wave_boundary_type), target :: Atmos_wave_boundary
   type(land_ice_atmos_boundary_type), target  :: Land_ice_atmos_boundary
   type(land_ice_boundary_type), target  :: Land_ice_boundary
   type(ice_ocean_boundary_type), target :: Ice_ocean_boundary
   type(ocean_ice_boundary_type), target :: Ocean_ice_boundary
+  type(ice_wave_boundary_type), target  :: Ice_wave_boundary
   type(ice_ocean_driver_type), pointer  :: ice_ocean_driver_CS => NULL()
 
   type(FmsTime_type) :: Time
   type(FmsTime_type) :: Time_step_atmos, Time_step_cpld
-  type(FmsTime_type) :: Time_atmos, Time_ocean
+  type(FmsTime_type) :: Time_atmos, Time_ocean, Time_waves
   type(FmsTime_type) :: Time_flux_ice_to_ocean, Time_flux_ocean_to_ice
 
   integer :: num_atmos_calls, na
@@ -388,11 +391,11 @@ program coupler_main
   call fmsconstants_init
   call fms_affinity_init
 
-  call coupler_init(Atm, Ocean, Land, Ice, Ocean_state, Atmos_land_boundary, Atmos_ice_boundary, &
-    Ocean_ice_boundary, Ice_ocean_boundary, Land_ice_atmos_boundary, Land_ice_boundary,          &
-    Ice_ocean_driver_CS, Ice_bc_restart, Ocn_bc_restart, ensemble_pelist, slow_ice_ocean_pelist, &
-    conc_nthreads, coupler_clocks, coupler_components_obj, coupler_chksum_obj, &
-    Time_step_cpld, Time_step_atmos, Time_atmos, Time_ocean, num_cpld_calls,   &
+  call coupler_init(Atm, Ocean, Land, Ice, Wave, Ocean_state, Atmos_land_boundary, Atmos_ice_boundary, &
+    Atmos_wave_boundary,Ocean_ice_boundary, Ice_ocean_boundary, Land_ice_atmos_boundary, Land_ice_boundary, &
+    Ice_wave_boundary, Ice_ocean_driver_CS, Ice_bc_restart, Ocn_bc_restart, ensemble_pelist, &
+    slow_ice_ocean_pelist, conc_nthreads, coupler_clocks, coupler_components_obj, coupler_chksum_obj, &
+    Time_step_cpld, Time_step_atmos, Time_atmos, Time_ocean, Time_waves, num_cpld_calls,   &
     num_atmos_calls, Time, Time_start, Time_end, Time_restart, Time_restart_current)
 
   if (do_chksum) call coupler_chksum_obj%get_coupler_chksums('coupler_init+', 0)
@@ -425,7 +428,7 @@ program coupler_main
       Time_flux_ocean_to_ice = Time
       !> Update Ice_ocean_boundary; the first iteration is supplied by restarts
       if(use_lag_fluxes) then
-        call coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, coupler_clocks)
+        call coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, ice_wave_boundary, coupler_clocks)
         Time_flux_ice_to_ocean = Time
       end if
     end if
@@ -478,7 +481,8 @@ program coupler_main
 
         if (do_atmos) call coupler_atmos_tracer_driver_gather_data(Atm, coupler_clocks)
 
-        if (do_flux) call coupler_sfc_boundary_layer(Atm, Land, Ice, Land_ice_atmos_boundary, &
+        if (do_flux) call coupler_sfc_boundary_layer(Atm, Land, Ice, Wave, Land_ice_atmos_boundary, &
+                                                     Atmos_wave_boundary, Ice_wave_boundary, &
                                                      Time_atmos, current_timestep, coupler_chksum_obj, coupler_clocks)
 
 
@@ -486,7 +490,7 @@ program coupler_main
 !$OMP&    NUM_THREADS(conc_nthreads)  &
 !$OMP&    DEFAULT(NONE)  &
 !$OMP&    PRIVATE(conc_nthreads) &
-!$OMP&    SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes) &
+!$OMP&    SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes, waves_npes) &
 !$OMP&    SHARED(Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary, Atmos_land_boundary, Atmos_ice_boundary) &
 !$OMP&    SHARED(Ocean_ice_boundary) &
 !$OMP&    SHARED(do_debug, do_flux, do_chksum, do_atmos, do_land, do_ice, do_concurrent_radiation, omp_sec, imb_sec) &
@@ -496,7 +500,7 @@ program coupler_main
 !$OMP&      NUM_THREADS(1) &
 !$OMP&      DEFAULT(NONE) &
 !$OMP&      PRIVATE(dsec) &
-!$OMP&      SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes) &
+!$OMP&      SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes, waves_npes) &
 !$OMP&      SHARED(Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary, Atmos_land_boundary, Atmos_ice_boundary) &
 !$OMP&      SHARED(Ocean_ice_boundary) &
 !$OMP&      SHARED(do_debug, do_flux, do_chksum, do_atmos, do_land, do_ice, do_concurrent_radiation, omp_sec, imb_sec) &
@@ -624,7 +628,7 @@ program coupler_main
       !this could serialize unless slow_ice_with_ocean is true.
       if ((.not.do_ice) .or. (.not.slow_ice_with_ocean)) call fms_mpp_set_current_pelist()
       if (Ice%slow_ice_PE .or. Ocean%is_ocean_pe) &
-          call coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, coupler_clocks, &
+          call coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary,ice_wave_boundary, coupler_clocks, &
           slow_ice_ocean_pelist=slow_ice_ocean_pelist, set_current_slow_ice_ocean_pelist=.True.)
       Time_flux_ice_to_ocean = Time
     endif
@@ -659,6 +663,19 @@ program coupler_main
       call fms_mpp_clock_end(coupler_clocks%ocean)
     endif
 
+    if (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      call fms_mpp_clock_begin(coupler_clocks%wave)
+
+      if (do_waves)  call update_wave_model(Atmos_wave_boundary, Ice_wave_boundary, Wave, Time_waves, Time_step_cpld )
+
+
+      Time_waves = Time_waves +  Time_step_cpld
+      Time = Time_waves
+
+      call fms_mpp_clock_end(coupler_clocks%wave)
+    endif
+
     !> write out intermediate restart file when needead.
     if (Time >= Time_restart) &
         call coupler_intermediate_restart(Atm, Ice, Ocean, Ocean_state, Ocn_bc_restart, Ice_bc_restart, &
@@ -678,9 +695,10 @@ program coupler_main
   call fms_mpp_set_current_pelist()
   call fms_mpp_clock_end(coupler_clocks%main)
 
-  call coupler_end(Atm, Land, Ice, Ocean, Ocean_state, Land_ice_atmos_boundary, Atmos_ice_boundary,&
-      Atmos_land_boundary, Ice_ocean_boundary, Ocean_ice_boundary, Ocn_bc_restart, Ice_bc_restart, &
-      nc, Time, Time_start, Time_end, Time_restart_current, coupler_chksum_obj, coupler_clocks)
+  call coupler_end(Atm, Land, Ice, Ocean, Wave, Ocean_state, Land_ice_atmos_boundary, Atmos_ice_boundary,&
+      Atmos_wave_boundary,Atmos_land_boundary, Ice_ocean_boundary, Ocean_ice_boundary, Ice_wave_boundary,&
+      Ocn_bc_restart, Ice_bc_restart, nc, Time, Time_start, Time_end, Time_restart_current, &
+      coupler_chksum_obj, coupler_clocks)
 
   call fms_memutils_print_memuse_stats( 'Memory HiWaterMark', always=.True. )
   call fms_end

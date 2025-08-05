@@ -68,6 +68,9 @@ module full_coupler_mod
   use ocean_model_mod,         only: ocean_model_restart
   use ocean_model_mod,         only: ocean_public_type_chksum, ice_ocn_bnd_type_chksum
 
+  use wave_type_mod, only: wave_data_type, atmos_wave_boundary_type, ice_wave_boundary_type
+  use wave_model_mod, only: wave_model_init, update_wave_model, wave_model_end
+
   use combined_ice_ocean_driver, only: update_slow_ice_and_ocean, ice_ocean_driver_type
   use combined_ice_ocean_driver, only: ice_ocean_driver_init, ice_ocean_driver_end
 !
@@ -82,6 +85,7 @@ module full_coupler_mod
   use flux_exchange_mod,       only: flux_check_stocks, flux_init_stocks
   use flux_exchange_mod,       only: flux_ocean_from_ice_stocks, flux_ice_to_ocean_stocks
   use flux_exchange_mod,       only: flux_atmos_to_ocean, flux_ex_arrays_dealloc
+  use flux_exchange_mod,       only: atm_to_wave, ice_to_wave
 
   use atmos_tracer_driver_mod, only: atmos_tracer_driver_gather_data
 
@@ -92,10 +96,11 @@ module full_coupler_mod
   implicit none
   private
 
-  public :: atmos_data_type, land_data_type, ice_data_type
+  public :: atmos_data_type, land_data_type, ice_data_type,wave_data_type
   public :: ocean_public_type, ocean_state_type
   public :: atmos_land_boundary_type, atmos_ice_boundary_type, land_ice_atmos_boundary_type
   public :: land_ice_boundary_type, ice_ocean_boundary_type, ocean_ice_boundary_type, ice_ocean_driver_type
+  public :: atmos_wave_boundary_type, ice_wave_boundary_type
 
   public :: fmsconstants_init
 
@@ -131,6 +136,8 @@ module full_coupler_mod
   public :: coupler_update_land_model_slow, coupler_flux_land_to_ice
   public :: coupler_unpack_land_ice_boundary, coupler_flux_ice_to_ocean
   public :: coupler_update_ice_model_slow_and_stocks, coupler_update_ocean_model
+
+  public :: update_wave_model
 
   public :: coupler_clock_type, coupler_components_type, coupler_chksum_type
 
@@ -172,6 +179,7 @@ module full_coupler_mod
   integer, public :: ocean_npes=0 !< The number of MPI tasks to use for the ocean
   integer, public :: ice_npes=0   !< The number of MPI tasks to use for the ice
   integer, public :: land_npes=0  !< The number of MPI tasks to use for the land
+  integer, public :: waves_npes=0 !< The number of MPI tasks to use for the wave
   integer, public :: atmos_nthreads=1 !< Number of OpenMP threads to use in the atmosphere
   integer, public :: ocean_nthreads=1 !< Number of OpenMP threads to use in the ocean
   integer, public :: radiation_nthreads=1 !< Number of threads to use for the radiation.
@@ -184,6 +192,7 @@ module full_coupler_mod
   logical, public :: do_ice =.true.  !< See do_atmos
   logical, public :: do_ocean=.true. !< See do_atmos
   logical, public :: do_flux =.true. !< See do_atmos
+  logical, public :: do_waves =.true.!< See do_atmos
 
   !> If .TRUE., the ocean executes concurrently with the atmosphere-land-ice on a separate
   !! set of PEs.  Concurrent should be .TRUE. if concurrent_ice is .TRUE.
@@ -224,8 +233,8 @@ module full_coupler_mod
 
   namelist /coupler_nml/ current_date, calendar, force_date_from_namelist,         &
                          months, days, hours, minutes, seconds, dt_cpld, dt_atmos, &
-                         do_atmos, do_land, do_ice, do_ocean, do_flux,             &
-                         atmos_npes, ocean_npes, ice_npes, land_npes,              &
+                         do_atmos, do_land, do_ice, do_ocean, do_flux, do_waves,   &
+                         atmos_npes, ocean_npes, ice_npes, land_npes, waves_npes,  &
                          atmos_nthreads, ocean_nthreads, radiation_nthreads,       &
                          concurrent, do_concurrent_radiation, use_lag_fluxes,      &
                          check_stocks, restart_interval, do_debug, do_chksum,      &
@@ -264,6 +273,7 @@ module full_coupler_mod
     integer :: set_ice_surface_exchange
     integer :: update_ice_model_slow_exchange
     integer :: ocean
+    integer :: wave
     integer :: flux_check_stocks
     integer :: intermediate_restart
     integer :: final_flux_check_stocks
@@ -272,6 +282,7 @@ module full_coupler_mod
     integer :: land_model_init
     integer :: ice_model_init
     integer :: ocean_model_init
+    integer :: wave_model_init
     integer :: flux_exchange_init
   end type coupler_clock_type
 
@@ -321,24 +332,27 @@ contains
 !#######################################################################
 
 !> \brief Initialize all defined exchange grids and all boundary maps
-  subroutine coupler_init(Atm, Ocean, Land, Ice, Ocean_state, Atmos_land_boundary, Atmos_ice_boundary, &
-      Ocean_ice_boundary, Ice_ocean_boundary, Land_ice_atmos_boundary, Land_ice_boundary,              &
+  subroutine coupler_init(Atm, Ocean, Land, Ice, Wave, Ocean_state, Atmos_land_boundary, Atmos_ice_boundary, &
+      Atmos_wave_boundary, Ocean_ice_boundary, Ice_ocean_boundary, Land_ice_atmos_boundary, Land_ice_boundary, Ice_wave_boundary, &
       Ice_ocean_driver_CS, Ice_bc_restart, Ocn_bc_restart, ensemble_pelist, slow_ice_ocean_pelist, conc_nthreads, &
       coupler_clocks, coupler_components_obj, coupler_chksum_obj, Time_step_cpld, Time_step_atmos, Time_atmos, &
-      Time_ocean, num_cpld_calls, num_atmos_calls, Time, Time_start, Time_end, Time_restart, Time_restart_current)
+      Time_ocean, Time_waves, num_cpld_calls, num_atmos_calls, Time, Time_start, Time_end, Time_restart, Time_restart_current)
 
     implicit none
 
     type(atmos_data_type), intent(inout) :: Atm
     type(land_data_type),  intent(inout) :: Land
     type(ice_data_type),   intent(inout) :: Ice
+    type(wave_data_type),  intent(inout) :: Wave
     type(ocean_public_type), intent(inout) :: Ocean
     type(ocean_state_type), pointer, intent(inout) :: Ocean_state
     type(atmos_land_boundary_type),  intent(inout) :: Atmos_land_boundary
     type(atmos_ice_boundary_type),   intent(inout) :: Atmos_ice_boundary
+    type(atmos_wave_boundary_type),  intent(inout) :: Atmos_wave_boundary
     type(ice_ocean_boundary_type),   intent(inout) :: Ice_ocean_boundary
     type(ocean_ice_boundary_type),   intent(inout) :: Ocean_ice_boundary
     type(land_ice_boundary_type),    intent(inout) :: Land_ice_boundary
+    type(ice_wave_boundary_type),    intent(inout) :: Ice_wave_boundary
     type(ice_ocean_driver_type), pointer, intent(inout) :: Ice_ocean_driver_CS
     type(land_ice_atmos_boundary_type),   intent(inout) :: Land_ice_atmos_boundary
     type(FmsNetcdfDomainFile_t), pointer, dimension(:), intent(inout) :: Ice_bc_restart, Ocn_bc_restart
@@ -351,7 +365,7 @@ contains
     type(coupler_components_type), intent(inout) :: coupler_components_obj
     type(coupler_chksum_type), intent(inout)     :: coupler_chksum_obj
 
-    type(FMSTime_type), intent(inout) :: Time_step_cpld, Time_step_atmos, Time_atmos, Time_ocean
+    type(FMSTime_type), intent(inout) :: Time_step_cpld, Time_step_atmos, Time_atmos, Time_ocean, Time_waves
     type(FMSTime_type), intent(inout) :: Time, Time_start, Time_end, Time_restart, Time_restart_current
 
     integer, intent(inout) :: num_cpld_calls, num_atmos_calls
@@ -373,11 +387,12 @@ contains
     character(len=9) :: month
     integer :: pe, npes
 
-    integer :: ens_siz(6), ensemble_size
+    integer :: ens_siz(7), ensemble_size
     integer :: ensemble_id = 1
 
     integer :: atmos_pe_start=0, atmos_pe_end=0, &
-               ocean_pe_start=0, ocean_pe_end=0
+               ocean_pe_start=0, ocean_pe_end=0, &
+               waves_pe_start=0, waves_pe_end=0
     integer :: n
     integer :: diag_model_subset=DIAG_ALL
     logical :: other_fields_exist
@@ -508,10 +523,15 @@ contains
 
     !Check for the consistency of PE counts
     if (concurrent) then
-!atmos_npes + ocean_npes must equal npes
+      !atmos_npes + ocean_npes must equal npes
+      !-> BGR what is the best way to do this with 3?
+      !   for now, I will disable concurrent coupling
+
+      if (do_waves) call fms_mpp_error(FATAL, 'Concurrent coupling not working with waves yet.')
+
       if (atmos_npes.EQ.0 ) atmos_npes = npes - ocean_npes
       if (ocean_npes.EQ.0 ) ocean_npes = npes - atmos_npes
-!both must now be non-zero
+      !both must now be non-zero
       if (atmos_npes.EQ.0 .OR. ocean_npes.EQ.0 ) &
         call fms_mpp_error( FATAL, 'coupler_init: atmos_npes or ocean_npes must be specified for concurrent coupling.' )
       if (atmos_npes+ocean_npes.NE.npes ) &
@@ -519,11 +539,12 @@ contains
     else                        !serial timestepping
       if ((atmos_npes.EQ.0) .and. (do_atmos .or. do_land .or. do_ice)) atmos_npes = npes
       if ((ocean_npes.EQ.0) .and. (do_ocean)) ocean_npes = npes
-      if (max(atmos_npes,ocean_npes).EQ.npes) then !overlapping pelists
+      if ((waves_npes.EQ.0) .and. (do_waves)) waves_npes = npes
+      if (max(atmos_npes,ocean_npes,waves_npes).EQ.npes) then !overlapping pelists
         ! do nothing
       else                    !disjoint pelists
-        if (atmos_npes+ocean_npes.NE.npes ) call fms_mpp_error( FATAL,  &
-             'coupler_init: atmos_npes+ocean_npes must equal npes for serial coupling on disjoint pelists.' )
+        if (atmos_npes+ocean_npes+waves_npes.NE.npes ) call fms_mpp_error( FATAL,  &
+             'coupler_init: atmos_npes+ocean_npes+waves_npes must equal npes for serial coupling on disjoint pelists.' )
       endif
     endif
 
@@ -535,12 +556,13 @@ contains
 
     allocate( Atm%pelist  (atmos_npes) )
     allocate( Ocean%pelist(ocean_npes) )
+    allocate( Wave%pelist (waves_npes) )
     allocate( Land%pelist (land_npes) )
     allocate( Ice%fast_pelist(ice_npes) )
 
     !Set up and declare all the needed pelists
-    call fms_ensemble_manager_ensemble_pelist_setup(concurrent, atmos_npes, ocean_npes, land_npes, ice_npes, &
-                               Atm%pelist, Ocean%pelist, Land%pelist, Ice%fast_pelist)
+    call fms_ensemble_manager_ensemble_pelist_setup(concurrent, atmos_npes, ocean_npes, land_npes, ice_npes, waves_npes,&
+                               Atm%pelist, Ocean%pelist, Land%pelist, Ice%fast_pelist, Wave%pelist)
 
 !set up affinities based on threads
 
@@ -553,6 +575,7 @@ contains
     Atm%pe            = ANY(Atm%pelist   .EQ. fms_mpp_pe())
     Ocean%is_ocean_pe = ANY(Ocean%pelist .EQ. fms_mpp_pe())
     Land%pe           = ANY(Land%pelist  .EQ. fms_mpp_pe())
+    Wave%pe           = ANY(Wave%pelist  .EQ. fms_mpp_pe())
 
     Ice%shared_slow_fast_PEs = .not.slow_ice_with_ocean
     ! However, if using a data atmosphere and slow_ice_with_ocean then shared_slow_fast_PEs
@@ -648,7 +671,7 @@ contains
     endif
 
     !> The pelists need to be set before initializing the clocks
-    call coupler_set_clock_ids(coupler_clocks, Atm, Land, Ice, Ocean, ensemble_pelist, &
+    call coupler_set_clock_ids(coupler_clocks, Atm, Land, Ice, Ocean, Wave, ensemble_pelist, &
                                slow_ice_ocean_pelist, ensemble_id)
 
     !Write out messages on root PEs
@@ -688,6 +711,15 @@ contains
         call fms_mpp_error( NOTE, 'coupler_init: '//trim(text) )
         write( text,'(a,2i6,a,i2.2)' )'fast Ice PE range: ', Ice%fast_pelist(1), Ice%fast_pelist(ice_npes), &
              ' ens_', ensemble_id
+        call fms_mpp_error( NOTE, 'coupler_init: '//trim(text) )
+      endif
+      if (waves_npes .gt. 0) then
+        write( text,'(a,2i6,a,i2.2)' )'Wave PE range: ', Wave%pelist(1), Wave%pelist(waves_npes), &
+             ' ens_', ensemble_id
+        call fms_mpp_error( NOTE, 'coupler_init: '//trim(text) )
+      else
+        write( text,'(a,i2.2)' )'Wave PE range is not set (do_waves=.false.) for ens_', &
+              ensemble_id
         call fms_mpp_error( NOTE, 'coupler_init: '//trim(text) )
       endif
 
@@ -746,6 +778,9 @@ contains
       ! does not work if the ice is on the ocean PEs.
       if ((ocean_npes /= npes) .and. .not.slow_ice_with_ocean) &
         diag_model_subset = DIAG_OCEAN  ! change diag_model_subset from DIAG_ALL
+    elseif (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      ! Do I need to set up a DIAG manager?  WW3 has its own diagnostics...
     endif
     if ( fms_mpp_pe() == fms_mpp_root_pe()) then
       call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
@@ -889,6 +924,7 @@ contains
 !   Initialize atm/land exchange (not for tracers)
     call gex_init()
 
+
 !-----------------------------------------------------------------------
 !------ initialize component models ------
 !------ grid info now comes from grid_spec file
@@ -944,6 +980,25 @@ contains
 #ifndef _USE_LEGACY_LAND_
       call fms_data_override_init(Land_domainUG_in = Land%ug_domain)
 #endif
+    endif
+!---- wave ----------
+    if (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      if (fms_mpp_pe().EQ.fms_mpp_root_pe()) then
+        call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
+        write(errunit,*) 'Starting to initialize wave model at '&
+                         //trim(walldate)//' '//trim(walltime)
+      endif
+      call fms_mpp_clock_begin(coupler_clocks%wave_model_init)
+      call wave_model_init(Atmos_Wave_Boundary, Ice_Wave_Boundary, Wave)
+      call fms_mpp_clock_end(coupler_clocks%wave_model_init)
+      if (fms_mpp_pe().EQ.fms_mpp_root_pe()) then
+        call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
+        write(errunit,*) 'Finished initializing wave model at '&
+                         //trim(walldate)//' '//trim(walltime)
+      endif
+      call fms_memutils_print_memuse_stats( 'wave_model_init' )
+      call fms_data_override_init(Wave_domain_in = Wave%domain)
     endif
 !---- ice -----------
     if (Ice%pe) then  ! This occurs for all fast or slow ice PEs.
@@ -1041,6 +1096,7 @@ contains
     call fms_mpp_domains_broadcast_domain(Ice%domain)
     call fms_mpp_domains_broadcast_domain(Ice%slow_domain_NH)
     call fms_mpp_domains_broadcast_domain(Ocean%domain)
+    call fms_mpp_domains_broadcast_domain(Wave%domain)
 !-----------------------------------------------------------------------
 !---- initialize flux exchange module ----
     if (fms_mpp_pe().EQ.fms_mpp_root_pe()) then
@@ -1050,10 +1106,11 @@ contains
     endif
 
     call fms_mpp_clock_begin(coupler_clocks%flux_exchange_init)
-    if(do_flux) call flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state,&
+    if(do_flux) call flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state, Wave,&
              atmos_ice_boundary, land_ice_atmos_boundary, &
              land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, &
-         do_ocean, slow_ice_ocean_pelist, dt_atmos=dt_atmos, dt_cpld=dt_cpld)
+             atmos_wave_boundary, ice_wave_boundary, &
+             do_ocean, slow_ice_ocean_pelist, dt_atmos=dt_atmos, dt_cpld=dt_cpld)
     call fms_mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
     call fms_mpp_clock_end(coupler_clocks%flux_exchange_init)
 
@@ -1066,6 +1123,7 @@ contains
 
     Time_atmos = Time
     Time_ocean = Time
+    Time_waves = Time
 
 !
 !       read in extra fields for the air-sea gas fluxes
@@ -1240,23 +1298,26 @@ contains
 
   !> This subroutine finalizes the run including a final call to get_coupler_chksums if do_chksum = .True.
   !! Coupler_restart is called for the final time.
-  subroutine coupler_end(Atm, Land, Ice, Ocean, Ocean_state, Land_ice_atmos_boundary, Atmos_ice_boundary,&
-                         Atmos_land_boundary, Ice_ocean_boundary, Ocean_ice_boundary, Ocn_bc_restart,    &
-                         Ice_bc_restart, current_timestep, Time_current, Time_start, Time_end, Time_restart_current,&
-                         coupler_chksum_obj, coupler_clocks)
+  subroutine coupler_end(Atm, Land, Ice, Ocean, Wave, Ocean_state, Land_ice_atmos_boundary, Atmos_ice_boundary,&
+                         Atmos_wave_boundary,Atmos_land_boundary, Ice_ocean_boundary, Ocean_ice_boundary,Ice_wave_boundary, &
+                         Ocn_bc_restart, Ice_bc_restart, current_timestep, Time_current, Time_start, Time_end, &
+                         Time_restart_current, coupler_chksum_obj, coupler_clocks)
 
     implicit none
 
     type(atmos_data_type), intent(inout) :: Atm  !< Atm
     type(land_data_type),  intent(inout) :: Land !< Land
     type(ice_data_type),   intent(inout) :: Ice  !< Ice
+    type(wave_data_type),  intent(inout) :: Wave !< Wave
     type(ocean_public_type),          intent(inout) :: Ocean        !< Ocean
     type(ocean_state_type),  pointer, intent(inout) :: Ocean_state  !< Ocean_state
     type(land_ice_atmos_boundary_type), intent(inout) :: Land_ice_atmos_boundary !<Land_ice_boundary
     type(atmos_ice_boundary_type),  intent(inout) :: Atmos_ice_boundary  !< Atmos_ice_boundary
     type(atmos_land_boundary_type), intent(inout) :: Atmos_land_boundary !< Atmos_land_boundary
+    type(atmos_wave_boundary_type), intent(inout) :: Atmos_wave_boundary !< Atmos_wave_boundary
     type(ice_ocean_boundary_type),  intent(inout) :: Ice_ocean_boundary  !< Ice_ocean_boundary
     type(ocean_ice_boundary_type),  intent(inout) :: Ocean_ice_boundary  !< Ocean_ice_boundary
+    type(ice_wave_boundary_type),   intent(inout) :: Ice_wave_boundary   !< Ice_wave_boundary
     type(FmsNetcdfDomainFile_t), dimension(:), pointer, intent(inout) :: Ocn_bc_restart !< required for coupler_restart
     type(FmsNetcdfDomainFile_t), dimension(:), pointer, intent(inout) :: Ice_bc_restart !< required for coupler_restart
     integer, intent(in) :: current_timestep   !< current_timestep (nc)
@@ -1289,6 +1350,10 @@ contains
 !the call to fms_io_exit has been moved here
 !this will work for serial code or concurrent (disjoint pelists)
 !but will fail on overlapping but unequal pelists
+    if (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      call wave_model_end (Wave, Atmos_wave_boundary, Ice_wave_boundary)
+    endif
     if (Ocean%is_ocean_pe) then
       call fms_mpp_set_current_pelist(Ocean%pelist)
       call ocean_model_end (Ocean, Ocean_state, Time_current)
@@ -1655,7 +1720,7 @@ contains
   end subroutine get_ocean_chksums
 
 !> \brief This subroutine sets the ID for clocks used in coupler_main
-  subroutine coupler_set_clock_ids(coupler_clocks, Atm, Land, Ice, Ocean, ensemble_pelist,&
+  subroutine coupler_set_clock_ids(coupler_clocks, Atm, Land, Ice, Ocean, Wave, ensemble_pelist,&
                                    slow_ice_ocean_pelist, ensemble_id)
 
     implicit none
@@ -1665,6 +1730,7 @@ contains
     type(land_data_type),    intent(in) :: Land  !< Land, required to retrieve pe information
     type(ocean_public_type), intent(in) :: Ocean !< Ocean, required to retrieve pe information
     type(ice_data_type),     intent(in) :: Ice   !< Ice, required to retrieve pe information
+    type(wave_data_type),    intent(in) :: Wave  !< Wave, required to retrieve pe information
     integer, dimension(:),   intent(in) :: slow_ice_ocean_pelist !< slow_ice_oean_pelist
     integer, dimension(:,:), intent(in) :: ensemble_pelist       !< ensemble_pelist
     integer, intent(in) :: ensemble_id !< ensemble_id used as index in ensemble_pelist
@@ -1689,6 +1755,10 @@ contains
     if (Ocean%is_ocean_pe) then
       call fms_mpp_set_current_pelist(Ocean%pelist)
       coupler_clocks%ocean_model_init = fms_mpp_clock_id( '  Init: ocean_model_init ' )
+    endif
+    if (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      coupler_clocks%wave_model_init = fms_mpp_clock_id( '  Init: wave_model_init ' )
     endif
     call fms_mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
     coupler_clocks%flux_exchange_init = fms_mpp_clock_id( '  Init: flux_exchange_init' )
@@ -1748,6 +1818,11 @@ contains
     if (Ocean%is_ocean_pe) then
       call fms_mpp_set_current_pelist(Ocean%pelist)
       coupler_clocks%ocean = fms_mpp_clock_id( 'OCN' )
+    endif
+
+    if (Wave%pe) then
+      call fms_mpp_set_current_pelist(Wave%pelist)
+      coupler_clocks%wave = fms_mpp_clock_id( 'WAV' )
     endif
 
     call fms_mpp_set_current_pelist()
@@ -1848,7 +1923,7 @@ contains
   !> \brief This subroutine calls flux_ocean_to_ice
   !! Clocks are set before and after call flux_ice_to_ocean. Current pelist is set when optional
   !! arguments are present and set_current_slow_ice_ocean_pelist=.True.
-  subroutine coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, coupler_clocks, &
+  subroutine coupler_flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, ice_wave_boundary, coupler_clocks, &
                                        slow_ice_ocean_pelist, set_current_slow_ice_ocean_pelist)
 
     implicit none
@@ -1856,6 +1931,7 @@ contains
     type(ice_data_type),     intent(inout)  :: Ice     !< Ice
     type(ocean_public_type), intent(inout)  :: Ocean   !< Ocean
     type(ice_ocean_boundary_type), intent(inout) :: Ice_ocean_boundary !< Ice_ocean_boundary
+    type(ice_wave_boundary_type), intent(in)     :: ice_wave_boundary
     type(coupler_clock_type),      intent(inout) :: coupler_clocks     !< coupler_clocks
     integer, dimension(:), optional, intent(in) :: slow_ice_ocean_pelist  !< slow_ice_ocean_pelist
     !> if true, will call mpp_set_current_pelist(slow_ice_ocean_pelist)
@@ -1875,7 +1951,7 @@ contains
     if(set_current_slow_ice_ocean_pelist_in) call fms_mpp_set_current_pelist(slow_ice_ocean_pelist)
 
     call fms_mpp_clock_begin(coupler_clocks%flux_ice_to_ocean)
-    call flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary)
+    call flux_ice_to_ocean(Ice, Ocean, Ice_ocean_boundary, ice_wave_boundary)
     call fms_mpp_clock_end(coupler_clocks%flux_ice_to_ocean)
 
   end subroutine coupler_flux_ice_to_ocean
@@ -1988,14 +2064,18 @@ contains
 
   !> \brief This subroutine calls coupler_sfc_boundary_layer.  Chksums are computed
   !! if do_chksum = .True.  Clocks are set for runtime statistics.
-  subroutine coupler_sfc_boundary_layer(Atm, Land, Ice, Land_ice_atmos_boundary, &
+  subroutine coupler_sfc_boundary_layer(Atm, Land, Ice, Wave, Land_ice_atmos_boundary, &
+                                        Atmos_wave_boundary, Ice_wave_boundary, &
                                         Time_atmos, current_timestep, coupler_chksum_obj, coupler_clocks)
 
     implicit none
     type(atmos_data_type), intent(inout) :: Atm  !< Atm
     type(land_data_type), intent(inout)  :: Land !< Land
     type(ice_data_type), intent(inout)   :: Ice  !< Ice
+    type(wave_data_type),  intent(inout) :: Wave !< Wave
     type(land_ice_atmos_boundary_type), intent(inout) :: Land_ice_atmos_boundary !< Land_ice_atmos_boundary
+    type(atmos_wave_boundary_type),     intent(inout) :: Atmos_wave_boundary     !< Atmos_wave_boundary
+    type(ice_wave_boundary_type),       intent(inout) :: Ice_wave_boundary       !< Ice_wave_boundary
     type(FmsTime_type), intent(in) :: Time_atmos           !< Atmos time
     integer, intent(in)            :: current_timestep     !< (nc-1)*num_atmos_cal + na
     type(coupler_chksum_type), intent(in)   :: coupler_chksum_obj
@@ -2005,6 +2085,8 @@ contains
 
     call sfc_boundary_layer( real(dt_atmos), Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary )
     if(do_chksum) call coupler_chksum_obj%get_atmos_ice_land_chksums('sfc+', current_timestep)
+    if (do_waves) call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
+    if (do_waves) call ice_to_wave(Time_atmos, Ice, Wave, Ice_wave_boundary)
 
     call fms_mpp_clock_end(coupler_clocks%sfc_boundary_layer)
 

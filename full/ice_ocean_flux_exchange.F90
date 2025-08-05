@@ -29,6 +29,7 @@ module ice_ocean_flux_exchange_mod
   use ocean_model_mod,     only: ocean_public_type, ice_ocean_boundary_type
   use ocean_model_mod,     only: ocean_state_type, ocean_model_data_get
   use ocean_model_mod,     only: ocean_model_init_sfc
+  use wave_type_mod,       only: ice_wave_boundary_type, wave_data_type
 
   implicit none ; private
 
@@ -54,7 +55,7 @@ module ice_ocean_flux_exchange_mod
 
 contains
 
-  subroutine ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state, ice_ocean_boundary, &
+  subroutine ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state, Wav, ice_ocean_boundary, &
                                           ocean_ice_boundary, Dt_cpl_in, debug_stocks_in,    &
                                           do_area_weighted_flux_in, ex_gas_fields_ice, ex_gas_fluxes, &
                                           do_ocean, slow_ice_ocean_pelist_in )
@@ -63,6 +64,7 @@ contains
     type(ice_data_type),           intent(inout) :: Ice !< A derived data type to specify ice boundary data
     type(ocean_public_type),       intent(inout) :: Ocean !< A derived data type to specify ocean boundary data
     type(ocean_state_type),        pointer       :: Ocean_state
+    type(wave_data_type),          intent(in)    :: Wav !< A derived data type to specify wave boundary data
     type(ice_ocean_boundary_type), intent(inout) :: ice_ocean_boundary !< A derived data type to specify properties and
                                                                        !! fluxes passed from ice to ocean
     type(ocean_ice_boundary_type), intent(inout) :: ocean_ice_boundary !< A derived data type to specify properties and
@@ -151,6 +153,13 @@ contains
     if (associated(Ice%mass_berg)) then
       allocate( ice_ocean_boundary%mass_berg  (is:ie,js:je) ) ;     ice_ocean_boundary%mass_berg = 0.0
     endif
+    if (Wav%waves_is_init) then
+      allocate( ice_ocean_boundary%ustkb(is:ie,js:je,wav%num_stk_bands) ) ; ice_ocean_boundary%ustkb(:,:,:) = 0.0
+      allocate( ice_ocean_boundary%vstkb(is:ie,js:je,Wav%num_stk_bands) ) ; ice_ocean_boundary%vstkb(:,:,:) = 0.0
+      allocate( ice_ocean_boundary%stk_wavenumbers(Wav%num_stk_bands))
+      ice_ocean_boundary%stk_wavenumbers = Wav%stk_wavenumbers
+      ice_ocean_boundary%num_stk_bands = Wav%num_stk_bands
+    endif
     ! Copy the stagger indication variables from the ice processors the ocean
     ! PEs and vice versa.  The defaults are large negative numbers, so the
     ! global max here picks out only values that have been set on active PEs.
@@ -226,15 +235,17 @@ contains
   !!       runoff = mass of calving since last time step (Kg/m2)
   !!       p_surf = surface pressure (Pa)
   !! </pre>
-  subroutine flux_ice_to_ocean ( Ice, Ocean, Ice_Ocean_Boundary )
+  subroutine flux_ice_to_ocean ( Ice, Ocean, Ice_Ocean_Boundary, ice_wave_boundary )
 
     type(ice_data_type),             intent(in)  :: Ice  !< A derived data type to specify ice boundary data
     type(ocean_public_type),         intent(in)  :: Ocean !< A derived data type to specify ocean boundary data
     type(ice_ocean_boundary_type), intent(inout) :: Ice_Ocean_Boundary !< A derived data type to specify properties and
                                                          !! fluxes passed from ice to ocean
+    type(ice_wave_boundary_type), intent(in)     :: ice_wave_boundary
 
     integer       :: m
     integer       :: n
+    integer       :: istk
     logical       :: used
 
     call fms_mpp_clock_begin(cplOcnClock)
@@ -312,6 +323,20 @@ contains
 
     if(ASSOCIATED(Ice_Ocean_Boundary%q_flux) ) call flux_ice_to_ocean_redistribute( Ice, Ocean, &
          Ice%flux_q, Ice_Ocean_Boundary%q_flux, Ice_Ocean_Boundary%xtype, do_area_weighted_flux )
+
+    if(ASSOCIATED(ice_wave_boundary%icegrd_ustkb_mpp) ) then
+      do istk = 1, ice_ocean_boundary%num_stk_bands
+        call flux_ice_to_ocean_redistribute( Ice, Ocean, ice_wave_boundary%icegrd_ustkb_mpp(:,:,1,istk), &
+             Ice_Ocean_Boundary%ustkb(:,:,istk), Ice_Ocean_Boundary%xtype, do_area_weighted_flux )
+      enddo
+    endif
+
+    if(ASSOCIATED(ice_wave_boundary%icegrd_vstkb_mpp) ) then
+      do istk = 1, ice_ocean_boundary%num_stk_bands
+        call flux_ice_to_ocean_redistribute( Ice, Ocean, ice_wave_boundary%icegrd_vstkb_mpp(:,:,1,istk), &
+             Ice_Ocean_Boundary%vstkb(:,:,istk), Ice_Ocean_Boundary%xtype, do_area_weighted_flux )
+      enddo
+    endif
 
     call fms_mpp_clock_end(fluxIceOceanClock)
     call fms_mpp_clock_end(cplOcnClock)
