@@ -22,8 +22,9 @@ module atm_ice_wave_exchange_mod
 
   !! FMS
   use FMS
-
-  use atmos_model_mod,     only: atmos_data_type
+  
+  !use atmos_model_mod,     only: atmos_data_type
+  use atmos_model_mod,     only: atmos_data_type, land_ice_atmos_boundary_type
   use land_model_mod,      only: land_data_type
   use ice_model_mod,       only: ice_data_type
   use ocean_model_mod,     only: ocean_public_type
@@ -117,9 +118,11 @@ contains
   end subroutine ice_wave_exchange_init
 
   !> Does atmosphere TO wave operations (could do wave TO atmosphere operations too).
-  subroutine atm_to_wave( Time, Atm, Wav, Atmos_wave_Boundary )
+!  subroutine atm_to_wave( Time, Atm, Wav, Atmos_wave_Boundary )
+  subroutine atm_to_wave( Time, land_ice_atmos_boundary, Wav, Atmos_wave_Boundary )
     type(FmsTime_type),                intent(in) :: Time !< Current time
-    type(atmos_data_type),           intent(in) :: Atm
+!    type(atmos_data_type),           intent(in) :: Atm
+    type(land_ice_atmos_boundary_type),intent(in) :: land_ice_atmos_boundary
     type(wave_data_type),            intent(in) :: Wav
     type(atmos_wave_boundary_type), intent(inout):: Atmos_wave_Boundary
 
@@ -131,8 +134,10 @@ contains
 
     remap_method = 1
 
-    call fms_xgrid_put_to_xgrid (Atm%u_bot , 'ATM', ex_u_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
-    call fms_xgrid_put_to_xgrid (Atm%v_bot , 'ATM', ex_v_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
+    !call fms_xgrid_put_to_xgrid (Atm%u_bot , 'ATM', ex_u_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
+    !call fms_xgrid_put_to_xgrid (Atm%v_bot , 'ATM', ex_v_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
+    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%u_ref , 'ATM', ex_u_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
+    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%v_ref , 'ATM', ex_v_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
     if (Wav%pe) then
        call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10_mpp, 'WAV', ex_u_atm, xmap_atm_wav)
        call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_v_atm, xmap_atm_wav)
