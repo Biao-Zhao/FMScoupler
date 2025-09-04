@@ -2085,7 +2085,8 @@ contains
 
     call sfc_boundary_layer( real(dt_atmos), Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary )
     if(do_chksum) call coupler_chksum_obj%get_atmos_ice_land_chksums('sfc+', current_timestep)
-    if (do_waves) call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
+    !if (do_waves) call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
+    if (do_waves) call atm_to_wave(Time_atmos, Land_ice_atmos_boundary, Wave, Atmos_wave_boundary)
     if (do_waves) call ice_to_wave(Time_atmos, Ice, Wave, Ice_wave_boundary)
 
     call fms_mpp_clock_end(coupler_clocks%sfc_boundary_layer)
