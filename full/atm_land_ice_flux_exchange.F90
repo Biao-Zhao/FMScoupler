@@ -87,7 +87,7 @@ use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, 
             flux_ex_arrays_dealloc,&
             atm_stock_integrate,  &
             send_ice_mask_sic
-  public  :: id_ust_wav, id_ustdir_wav, id_charn_wav  ! used wave_interfaces.F90, in added by Biao
+  public  :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav  ! used by wave_interfaces.F90, added by Biao
   !-----------------------------------------------------------------------
   character(len=128) :: version = '$Id$'
   character(len=128) :: tag = '$Name$'
@@ -103,7 +103,7 @@ use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, 
 
   character(len=4), parameter :: mod_name = 'flux'
 
-  integer :: id_ust_wav, id_ustdir_wav, id_charn_wav,        &
+  integer :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav,        &
              id_drag_moist,  id_drag_heat,  id_drag_mom,     &
              id_rough_moist, id_rough_heat, id_rough_mom,    &
              id_land_mask,   id_ice_mask,     &
@@ -3672,6 +3672,10 @@ contains
     id_q_star     = &
          fms_diag_register_diag_field ( mod_name, 'q_star',     atmos_axes, Time, &
          'moisture scale',      'kg water/kg air'   )
+
+    id_hs_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'hs_wav',     atmos_axes, Time, &
+         'significant wave height from wave model',   'm'   )
 
     id_ust_wav     = &
          fms_diag_register_diag_field ( mod_name, 'ust_wav',     atmos_axes, Time, &
