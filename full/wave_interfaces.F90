@@ -22,8 +22,6 @@ module atm_ice_wave_exchange_mod
 
   !! FMS
   use FMS
-  
-  !use atmos_model_mod,     only: atmos_data_type
   use atmos_model_mod,     only: atmos_data_type, land_ice_atmos_boundary_type
   use land_model_mod,      only: land_data_type
   use ice_model_mod,       only: ice_data_type
@@ -54,8 +52,8 @@ contains
     type(atmos_data_type),          intent(in)    :: Atm !< A derived data type to specify atmospheric boundary data
     type(wave_data_type),           intent(inout) :: Wav !< A derived data type to specify wave boundary data
     type(atmos_wave_boundary_type), intent(inout) :: atmos_wave_boundary !< A derived data type to specify properties
-                                                                     !! passed from atmos to waves
-
+                                                                         !! passed from atmos to waves
+    !-----------  local variables  --------------
     integer :: is, ie, js, je
 
     call fms_xgrid_setup_xmap(xmap_atm_wav, (/ 'ATM', 'WAV' /),       &
@@ -90,7 +88,7 @@ contains
     type(wave_data_type),           intent(inout) :: Wav !< A derived data type to specify wave boundary data
     type(ice_wave_boundary_type), intent(inout)   :: Ice_wave_boundary !< A derived data type to specify properties
                                                                      !! passed from atmos to waves
-
+    !-----------  local variables  --------------
     integer :: is, ie, js, je
 
     call fms_xgrid_setup_xmap(xmap_ice_wav, (/ 'WAV', 'OCN' /),       &
@@ -104,13 +102,17 @@ contains
     ice_wave_boundary%wavgrd_ucurr_mpp(:,:,:) = 0.0
     allocate( ice_wave_boundary%wavgrd_vcurr_mpp(is:ie,js:je,1) )
     ice_wave_boundary%wavgrd_vcurr_mpp(:,:,:) = 0.0
-    allocate( ice_wave_boundary%wavgrd_ICE_mpp(is:ie,js:je,1) )
-    ice_wave_boundary%wavgrd_ICE_mpp(:,:,:) = 0.0
+    allocate( ice_wave_boundary%wavgrd_Ice_mpp(is:ie,js:je,1) )
+    ice_wave_boundary%wavgrd_Ice_mpp(:,:,:) = 0.0
 
     allocate( wav%ustkb_mpp(is:ie,js:je,wav%num_stk_bands) )
     wav%ustkb_mpp(:,:,:) = 0.0
     allocate( wav%vstkb_mpp(is:ie,js:je,wav%num_stk_bands) )
     wav%vstkb_mpp(:,:,:) = 0.0
+    allocate( wav%tauox_wav(is:ie,js:je,1) )
+    wav%tauox_wav(:,:,1) =0.0 
+    allocate( wav%tauoy_wav(is:ie,js:je,1) )
+    wav%tauoy_wav(:,:,1) =0.0
 
     ! This are a temporary and costly trick to make MPI work
     allocate( wav%glob_loc_X(is:ie,js:je) )
@@ -128,11 +130,9 @@ contains
   end subroutine ice_wave_exchange_init
 
   !> Does atmosphere TO wave operations (could do wave TO atmosphere operations too).
-!  subroutine atm_to_wave( Time, Atm, Wav, Atmos_wave_Boundary )
   subroutine atm_to_wave( Time, land_ice_atmos_boundary, Wav, Atmos_wave_Boundary )
-    use atm_land_ice_flux_exchange_mod, only: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav 
+    use atm_land_ice_flux_exchange_mod, only: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref 
     type(FmsTime_type),                intent(in) :: Time !< Current time
-!    type(atmos_data_type),           intent(in) :: Atm
     type(land_ice_atmos_boundary_type),intent(in) :: land_ice_atmos_boundary
     type(wave_data_type),            intent(in) :: Wav
     type(atmos_wave_boundary_type), intent(inout):: Atmos_wave_Boundary
@@ -140,12 +140,13 @@ contains
 ! ---- local vars, added by Biao ----------------------------------------------------------
     real, dimension(size(Land_Ice_Atmos_Boundary%t,1),size(Land_Ice_Atmos_Boundary%t,2)) :: diag_atm
     real, dimension(n_xgrid_atm_wav) :: &
-         ex_Uref_atm,     &
-         ex_Vref_atm,     &
+         ex_Unref_atm,    &
+         ex_Vnref_atm,    &
          ex_hs_wav,       &
          ex_ust_wav,      &
          ex_ustdir_wav,   &
          ex_charn_wav
+
 
     integer :: remap_method
     logical :: used
@@ -153,18 +154,16 @@ contains
     remap_method = 1
 
     ! initilize variables on Exchange grid
-    ex_Uref_atm   = 0.0
-    ex_Vref_atm   = 0.0
+    ex_Unref_atm  = 0.0
+    ex_Vnref_atm  = 0.0
     ex_hs_wav     = 0.0
     ex_ust_wav    = 0.0
     ex_ustdir_wav = 0.0
     ex_charn_wav  = 0.0
 
     !> Put atmospheric variables onto exchange grid, modified by Biao
-    !call fms_xgrid_put_to_xgrid (Atm%u_bot , 'ATM', ex_u_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
-    !call fms_xgrid_put_to_xgrid (Atm%v_bot , 'ATM', ex_v_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
-    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%u_ref , 'ATM', ex_Uref_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
-    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%v_ref , 'ATM', ex_Vref_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
+    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%un_ref , 'ATM', ex_Unref_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
+    call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%vn_ref , 'ATM', ex_Vnref_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
 
     !> Put wave related variables onto exchange grid, added by Biao
     call fms_xgrid_put_to_xgrid (Wav%hs, 'WAV', ex_hs_wav , xmap_atm_wav)
@@ -173,8 +172,8 @@ contains
     call fms_xgrid_put_to_xgrid (Wav%charn_wav, 'WAV', ex_charn_wav , xmap_atm_wav)
 
     if (Wav%pe) then
-       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10_mpp, 'WAV', ex_Uref_atm, xmap_atm_wav)
-       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_Vref_atm, xmap_atm_wav)
+       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10_mpp, 'WAV', ex_Unref_atm, xmap_atm_wav)
+       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_Vnref_atm, xmap_atm_wav)
     endif
 
     !------- output diagnostic variables from wave, added by Biao-----------
@@ -198,6 +197,17 @@ contains
        call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_charn_wav, xmap_atm_wav)
        used = fms_diag_send_data ( id_charn_wav, diag_atm, Time )
     endif
+
+    if ( id_un_ref > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Unref_atm, xmap_atm_wav)
+       used = fms_diag_send_data ( id_un_ref, diag_atm, Time )
+    endif
+
+    if ( id_vn_ref > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Vnref_atm, xmap_atm_wav)
+       used = fms_diag_send_data ( id_vn_ref, diag_atm, Time )
+    endif
+
  
   end subroutine atm_to_wave
 
@@ -209,20 +219,22 @@ contains
     type(ice_wave_boundary_type), intent(inout):: Ice_wave_Boundary !< The ice-wave boundary container
 
     ! ---- local vars, added by Biao ----------------------------------------------------------
-    real, dimension(size(Ice%part_size,1),size(Ice%part_size,2),size(Ice%part_size,3)) :: open_sea
+    real, dimension(size(Ice%part_size,1),size(Ice%part_size,2),size(Ice%part_size,3)) :: ice_frac
+    real, dimension(size(Ice%part_size,1),size(Ice%part_size,2)) :: ice_frac_2d
     real, dimension(n_xgrid_ice_wav) :: &
          ex_ucurr,  & ! Exchange grid x-current
          ex_vcurr,  & ! Exchange grid y-current
          ex_ustokes,& ! Exchange grid x-Stokes drift
          ex_vstokes,& ! Exchange grid y-Stokes drift
-         ex_opensea,&
-         ex_hs_wav,       &
+         ex_ice_frac,&
          ex_ust_wav,      &
-         ex_ustdir_wav,   &
-         ex_charn_wav
+         ex_charn_wav,    &
+         ex_tauox_wav,    &
+         ex_tauoy_wav
 
     integer :: remap_method ! Interpolation method (todo: list options)
     integer :: i_stk
+    integer :: i, j, ncat
 
     remap_method = 1
 
@@ -231,32 +243,40 @@ contains
     ex_vcurr      = 0.0
     ex_ustokes    = 0.0
     ex_vstokes    = 0.0
-    ex_opensea    = 0.0
-    ex_hs_wav     = 0.0
+    ex_ice_frac   = 0.0
     ex_ust_wav    = 0.0
-    ex_ustdir_wav = 0.0
     ex_charn_wav  = 0.0
-    
-    open_sea = 0.0
-    open_sea(:,:,1) = 1.0
+    ex_tauox_wav  = 0.0
+    ex_tauoy_wav  = 0.0 
+
+    ice_frac      = 0.0
+    ice_frac_2d   = 0.0
+    ncat = size(Ice%part_size, 3)
+    ice_frac_2d = sum(Ice%part_size(:,:,2:ncat), dim=3)
+    ice_frac_2d = max(0.0, min(1.0, ice_frac_2d))
+    ice_frac(:,:,1) = ice_frac_2d
 
     ! -> Put Ocean (ice) parameters onto exchange grid
-    call fms_xgrid_put_to_xgrid (Ice%u_surf(:,:,:) , 'OCN', ex_ucurr , xmap_ice_wav)
-    call fms_xgrid_put_to_xgrid (Ice%v_surf(:,:,:) , 'OCN', ex_vcurr , xmap_ice_wav)
-    call fms_xgrid_put_to_xgrid (open_sea, 'OCN', ex_opensea, xmap_ice_wav)
+    call fms_xgrid_put_to_xgrid (Ice%u_surf, 'OCN', ex_ucurr , xmap_ice_wav)
+    call fms_xgrid_put_to_xgrid (Ice%v_surf, 'OCN', ex_vcurr , xmap_ice_wav)
+    call fms_xgrid_put_to_xgrid (ice_frac ,  'OCN', ex_ice_frac , xmap_ice_wav)
 
     ! -> Put Wave parameters onto exchange grid, added by Biao
-    call fms_xgrid_put_to_xgrid (Wav%hs(:,:,1), 'WAV', ex_hs_wav , xmap_ice_wav)
     call fms_xgrid_put_to_xgrid (Wav%ust_wav(:,:,1), 'WAV', ex_ust_wav , xmap_ice_wav)
-    call fms_xgrid_put_to_xgrid (Wav%ustdir_wav(:,:,1), 'WAV', ex_ustdir_wav , xmap_ice_wav)
     call fms_xgrid_put_to_xgrid (Wav%charn_wav(:,:,1), 'WAV', ex_charn_wav , xmap_ice_wav)
-    
+    call fms_xgrid_put_to_xgrid (Wav%tauox_wav(:,:,1), 'WAV', ex_tauox_wav , xmap_ice_wav)
+    call fms_xgrid_put_to_xgrid (Wav%tauoy_wav(:,:,1), 'WAV', ex_tauoy_wav , xmap_ice_wav)    
 
     ! -> Only on wave-PEs, bring wave information off exchange grid
     if (Wav%pe) then
        call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%wavgrd_ucurr_mpp(:,:,1), 'WAV', ex_ucurr, xmap_ice_wav)
        call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%wavgrd_vcurr_mpp(:,:,1), 'WAV', ex_vcurr, xmap_ice_wav)
-       call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%wavgrd_ICE_mpp(:,:,1), 'WAV', 1-ex_opensea, xmap_ice_wav)
+       call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%wavgrd_Ice_mpp(:,:,1), 'WAV', ex_ice_frac, xmap_ice_wav)
+    endif
+    
+    if (Ice%pe) then
+        call fms_xgrid_get_from_xgrid(Ice%ust_wav, 'OCN', ex_ust_wav, xmap_ice_wav)
+        call fms_xgrid_get_from_xgrid(Ice%charn_wav, 'OCN', ex_charn_wav, xmap_ice_wav)
     endif
 
     do i_stk = 1,wav%num_Stk_bands

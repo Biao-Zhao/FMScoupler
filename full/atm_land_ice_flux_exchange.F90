@@ -72,7 +72,7 @@ module atm_land_ice_flux_exchange_mod
 !! FMS
 use FMS
 use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, &
-                        PI, CP_OCEAN, WTMCO2, WTMC, EPSLN, GRAV, WTMH2O
+                        PI, CP_OCEAN, WTMCO2, WTMC, EPSLN, GRAV, WTMH2O, VONKARM 
 
   implicit none
   include 'netcdf.inc'
@@ -87,7 +87,7 @@ use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, 
             flux_ex_arrays_dealloc,&
             atm_stock_integrate,  &
             send_ice_mask_sic
-  public  :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav  ! used by wave_interfaces.F90, added by Biao
+  public  :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref ! used by wave_interfaces.F90, added by Biao
   !-----------------------------------------------------------------------
   character(len=128) :: version = '$Id$'
   character(len=128) :: tag = '$Name$'
@@ -104,6 +104,7 @@ use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, 
   character(len=4), parameter :: mod_name = 'flux'
 
   integer :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav,        &
+             id_un_ref, id_vn_ref,                           &
              id_drag_moist,  id_drag_heat,  id_drag_mom,     &
              id_rough_moist, id_rough_heat, id_rough_mom,    &
              id_land_mask,   id_ice_mask,     &
@@ -572,6 +573,8 @@ contains
     allocate( land_ice_atmos_boundary%t_ocean(is:ie,js:je) )! Joseph: surf ocean temp
     allocate( land_ice_atmos_boundary%u_ref(is:ie,js:je) )  ! bqx
     allocate( land_ice_atmos_boundary%v_ref(is:ie,js:je) )  ! bqx
+    allocate( land_ice_atmos_boundary%un_ref(is:ie,js:je) ) ! Biao
+    allocate( land_ice_atmos_boundary%vn_ref(is:ie,js:je) ) ! Biao
     allocate( land_ice_atmos_boundary%t_ref(is:ie,js:je) )  ! cjg: PBL depth mods
     allocate( land_ice_atmos_boundary%q_ref(is:ie,js:je) )  ! cjg: PBL depth mods
     allocate( land_ice_atmos_boundary%albedo(is:ie,js:je) )
@@ -606,6 +609,8 @@ contains
     land_ice_atmos_boundary%t_ocean=200.0
     land_ice_atmos_boundary%u_ref=0.0   ! bqx
     land_ice_atmos_boundary%v_ref=0.0   ! bqx
+    land_ice_atmos_boundary%un_ref=0.0   ! Biao
+    land_ice_atmos_boundary%vn_ref=0.0   ! Biao
     land_ice_atmos_boundary%t_ref=273.0   ! cjg: PBL depth mods
     land_ice_atmos_boundary%q_ref=0.0     ! cjg: PBL depth mods
     land_ice_atmos_boundary%albedo=0.0
@@ -718,6 +723,7 @@ contains
          ex_thv_atm, ex_thv_surf, &
          ex_cd_q,       &
          ex_ref, ex_ref_u, ex_ref_v, ex_u10, &
+         ex_ref_un, ex_ref_vn,  &
          ex_ref2,       &
          ex_t_ref,      &
          ex_qs_ref,     &
@@ -1295,9 +1301,12 @@ contains
        do i = is,ie
           ex_u10(i) = 0.
           if(ex_avail(i)) then
-             ex_ref_u(i) = ex_u_surf(i) + (ex_u_atm(i)-ex_u_surf(i)) * ex_del_m(i)
-             ex_ref_v(i) = ex_v_surf(i) + (ex_v_atm(i)-ex_v_surf(i)) * ex_del_m(i)
-             ex_u10(i) = sqrt(ex_ref_u(i)**2 + ex_ref_v(i)**2)
+             ex_ref_u(i)  = ex_u_surf(i) + (ex_u_atm(i)-ex_u_surf(i)) * ex_del_m(i)
+             ex_ref_v(i)  = ex_v_surf(i) + (ex_v_atm(i)-ex_v_surf(i)) * ex_del_m(i)
+             ex_u10(i)    = sqrt(ex_ref_u(i)**2 + ex_ref_v(i)**2)
+             ! neutral wind speed at zrefm, added by Biao
+             ex_ref_un(i) = ex_ref_u(i)*ex_u_star(i)/VONKARM *log(zrefm/ex_rough_mom(i))/ex_u10(i)
+             ex_ref_vn(i) = ex_ref_v(i)*ex_u_star(i)/VONKARM *log(zrefm/ex_rough_mom(i))/ex_u10(i)
           endif
        enddo
        do n = 1, ex_gas_fields_atm%num_bcs  !{
@@ -1526,7 +1535,9 @@ contains
     end do
 
     call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%u_ref, 'ATM', ex_ref_u     , xmap_sfc, complete=.false.) !bqx
-    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%v_ref, 'ATM', ex_ref_v     , xmap_sfc, complete=.true.) !bqx
+    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%v_ref, 'ATM', ex_ref_v     , xmap_sfc, complete=.false.) !bqx
+    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%un_ref, 'ATM', ex_ref_un   , xmap_sfc, complete=.false.)
+    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%vn_ref, 'ATM', ex_ref_vn   , xmap_sfc, complete=.true.) 
 
 ! kgao: for shield+mom6 coupling; used by shield pbl schemes (am5 with tke-edmf should do the same)
 #ifndef use_AM3_physics
@@ -3783,6 +3794,16 @@ contains
     id_v_ref      = &
          fms_diag_register_diag_field ( mod_name, 'v_ref',      atmos_axes, Time,     &
          'meridional wind component at '//label_zm, 'm/s', &
+         range=vrange )
+
+    id_un_ref      = &
+         fms_diag_register_diag_field ( mod_name, 'un_ref',      atmos_axes, Time, &
+         'neutral zonal wind component at '//label_zm,  'm/s', &
+         range=vrange )
+
+    id_vn_ref      = &
+         fms_diag_register_diag_field ( mod_name, 'vn_ref',      atmos_axes, Time,     &
+         'neutral meridional wind component at '//label_zm, 'm/s', &
          range=vrange )
 
     id_wind_ref = &
