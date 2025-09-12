@@ -188,11 +188,11 @@ module full_coupler_mod
   !! This is used when ALL the output fields sent by this component to the coupler have been
   !! overridden  using the data_override feature.  This is for advanced users only.
   logical, public :: do_atmos =.true.
-  logical, public :: do_land =.true. !< See do_atmos
-  logical, public :: do_ice =.true.  !< See do_atmos
-  logical, public :: do_ocean=.true. !< See do_atmos
-  logical, public :: do_flux =.true. !< See do_atmos
-  logical, public :: do_waves =.true.!< See do_atmos
+  logical, public :: do_land  =.true. 
+  logical, public :: do_ice   =.true.  
+  logical, public :: do_ocean =.true. 
+  logical, public :: do_flux  =.true. 
+  logical, public :: do_waves =.false.
 
   !> If .TRUE., the ocean executes concurrently with the atmosphere-land-ice on a separate
   !! set of PEs.  Concurrent should be .TRUE. if concurrent_ice is .TRUE.
@@ -1019,7 +1019,7 @@ contains
       call ice_model_init(Ice, Time_init, Time, Time_step_atmos, &
                            Time_step_cpld, Verona_coupler=.false., &
                           concurrent_ice=concurrent_ice, &
-                          gas_fluxes=gas_fluxes, gas_fields_ocn=gas_fields_ocn )
+                          gas_fluxes=gas_fluxes, gas_fields_ocn=gas_fields_ocn, do_waves=do_waves)
       call fms_mpp_clock_end(coupler_clocks%ice_model_init)
 
       ! This must be called using the union of the ice PE_lists.
@@ -1049,7 +1049,7 @@ contains
 
       call fms_mpp_clock_begin(coupler_clocks%ocean_model_init)
       call ocean_model_init( Ocean, Ocean_state, Time_init, Time, &
-                             gas_fields_ocn=gas_fields_ocn  )
+                             gas_fields_ocn=gas_fields_ocn, do_waves=do_waves)
       call fms_mpp_clock_end(coupler_clocks%ocean_model_init)
 
       if (concurrent) then
@@ -2085,7 +2085,6 @@ contains
 
     call sfc_boundary_layer( real(dt_atmos), Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary )
     if(do_chksum) call coupler_chksum_obj%get_atmos_ice_land_chksums('sfc+', current_timestep)
-    !if (do_waves) call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
     if (do_waves) call atm_to_wave(Time_atmos, Land_ice_atmos_boundary, Wave, Atmos_wave_boundary)
     if (do_waves) call ice_to_wave(Time_atmos, Ice, Wave, Ice_wave_boundary)
 
