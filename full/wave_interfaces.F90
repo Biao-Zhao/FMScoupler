@@ -48,6 +48,7 @@ module atm_ice_wave_exchange_mod
   real    :: Dt_cpl
 contains
 
+
   subroutine atm_wave_exchange_init(Atm, Wav, Atmos_wave_boundary)
     type(atmos_data_type),          intent(in)    :: Atm !< A derived data type to specify atmospheric boundary data
     type(wave_data_type),           intent(inout) :: Wav !< A derived data type to specify wave boundary data
@@ -82,6 +83,7 @@ contains
 
 
   end subroutine atm_wave_exchange_init
+
 
   subroutine ice_wave_exchange_init(Ice, Wav, Ice_wave_boundary)
     type(ice_data_type),          intent(in)      :: Ice !< A derived data type to specify ocean/ice boundary data
@@ -129,9 +131,9 @@ contains
     return
   end subroutine ice_wave_exchange_init
 
+
   !> Does atmosphere TO wave operations (could do wave TO atmosphere operations too).
   subroutine atm_to_wave( Time, land_ice_atmos_boundary, Wav, Atmos_wave_Boundary )
-    use atm_land_ice_flux_exchange_mod, only: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref 
     type(FmsTime_type),                intent(in) :: Time !< Current time
     type(land_ice_atmos_boundary_type),intent(in) :: land_ice_atmos_boundary
     type(wave_data_type),            intent(in) :: Wav
@@ -176,40 +178,9 @@ contains
        call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_Vnref_atm, xmap_atm_wav)
     endif
 
-    !------- output diagnostic variables from wave, added by Biao-----------
-
-    if ( id_hs_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_hs_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_hs_wav, diag_atm, Time )
-    endif
-
-    if ( id_ust_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ust_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_ust_wav, diag_atm, Time )
-    endif    
-
-    if ( id_ustdir_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ustdir_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_ustdir_wav, diag_atm, Time )
-    endif
-
-    if ( id_charn_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_charn_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_charn_wav, diag_atm, Time )
-    endif
-
-    if ( id_un_ref > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Unref_atm, xmap_atm_wav)
-       used = fms_diag_send_data ( id_un_ref, diag_atm, Time )
-    endif
-
-    if ( id_vn_ref > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Vnref_atm, xmap_atm_wav)
-       used = fms_diag_send_data ( id_vn_ref, diag_atm, Time )
-    endif
-
- 
   end subroutine atm_to_wave
+
+  
 
   !> Does both ice TO wave and wave TO ice exchange grid operations.
   subroutine ice_to_wave( Time, Ice, Wav, Ice_wave_Boundary )
