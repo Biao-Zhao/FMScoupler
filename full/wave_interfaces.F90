@@ -46,14 +46,23 @@ module atm_ice_wave_exchange_mod
   integer :: cplClock, fluxLandIceClock
   logical :: do_runoff
   real    :: Dt_cpl
+  
+  character(len=4), parameter :: mod_name = 'flux'
+  integer :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref
+  real    :: z_ref_heat =  2. !< Reference height (meters) for temperature and relative humidity diagnostics
+                              !! (t_ref, rh_ref, del_h, del_q)
+  real    :: z_ref_mom  = 10. !< Reference height (meters) for mementum diagnostics (u_ref, v_ref, del_m)
+
 contains
 
 
-  subroutine atm_wave_exchange_init(Atm, Wav, Atmos_wave_boundary)
+  subroutine atm_wave_exchange_init(Time, Atm, Wav, Atmos_wave_boundary, z_ref_heat_in, z_ref_mom_in)
+    type(FmsTime_type),             intent(in)    :: Time !< The model's current time
     type(atmos_data_type),          intent(in)    :: Atm !< A derived data type to specify atmospheric boundary data
     type(wave_data_type),           intent(inout) :: Wav !< A derived data type to specify wave boundary data
     type(atmos_wave_boundary_type), intent(inout) :: atmos_wave_boundary !< A derived data type to specify properties
                                                                          !! passed from atmos to waves
+    real,                           intent(in)    :: z_ref_heat_in, z_ref_mom_in
     !-----------  local variables  --------------
     integer :: is, ie, js, je
 
@@ -63,6 +72,13 @@ contains
     ! exchange grid indices
     X2_GRID_ATM = 1; X2_GRID_WAV = 2;
     n_xgrid_atm_wav = max(fms_xgrid_count(xmap_atm_wav),1)
+
+    !----- initialize diagnostic fields -----
+    !----- all fields will be output on the atmospheric grid -----
+    z_ref_heat = z_ref_heat_in
+    z_ref_mom = z_ref_mom_in
+    call diag_wave_field_init ( Time, Atm%axes(1:2))
+
     call fms_mpp_domains_get_compute_domain( Wav%domain, is, ie, js, je )
     !allocate atmos_wave_boundary
     allocate( atmos_wave_boundary%wavgrd_u10_mpp(is:ie,js:je,1) )
@@ -85,9 +101,10 @@ contains
   end subroutine atm_wave_exchange_init
 
 
-  subroutine ice_wave_exchange_init(Ice, Wav, Ice_wave_boundary)
+  subroutine ice_wave_exchange_init(Time, Ice, Wav, Ice_wave_boundary)
+    type(FmsTime_type),           intent(in)      :: Time !< The model's current time
     type(ice_data_type),          intent(in)      :: Ice !< A derived data type to specify ocean/ice boundary data
-    type(wave_data_type),           intent(inout) :: Wav !< A derived data type to specify wave boundary data
+    type(wave_data_type),         intent(inout)   :: Wav !< A derived data type to specify wave boundary data
     type(ice_wave_boundary_type), intent(inout)   :: Ice_wave_boundary !< A derived data type to specify properties
                                                                      !! passed from atmos to waves
     !-----------  local variables  --------------
@@ -178,6 +195,39 @@ contains
        call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_Vnref_atm, xmap_atm_wav)
     endif
 
+    !    ------- output diagnostic variables from wave, added by Biao-----------
+    if ( id_hs_wav > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_hs_wav, xmap_atm_wav)
+       used = fms_diag_send_data ( id_hs_wav, diag_atm, Time )
+    endif
+
+    if ( id_ust_wav > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ust_wav, xmap_atm_wav)
+       used = fms_diag_send_data ( id_ust_wav, diag_atm, Time )
+    endif
+
+    if ( id_ustdir_wav > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ustdir_wav, xmap_atm_wav)
+       used = fms_diag_send_data ( id_ustdir_wav, diag_atm, Time )
+    endif
+
+    if ( id_charn_wav > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_charn_wav, xmap_atm_wav)
+       used = fms_diag_send_data ( id_charn_wav, diag_atm, Time )
+    endif
+
+    !    ------ neutral wind speed at reference level ----
+    if ( id_un_ref > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Unref_atm, xmap_atm_wav)
+       used = fms_diag_send_data ( id_un_ref, diag_atm, Time )
+    endif
+
+    if ( id_vn_ref > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Vnref_atm, xmap_atm_wav)
+       used = fms_diag_send_data ( id_vn_ref, diag_atm, Time )
+    endif
+
+
   end subroutine atm_to_wave
 
   
@@ -263,5 +313,66 @@ contains
 
     return
   end subroutine ice_to_wave
+
+
+  !> \brief Initializes diagnostic fields that may be output from this
+  !! module (the ID numbers may be referenced anywhere in this module)
+  subroutine diag_wave_field_init ( Time, atmos_axes )
+
+    type(FmsTime_type), intent(in) :: Time
+    integer,         intent(in) :: atmos_axes(2)
+    !  local variables
+    integer :: iref
+    character(len=6) :: label_zm, label_zh
+    real, dimension(2) :: trange = (/  100., 400. /), &
+                          vrange = (/ -400., 400. /), &
+                          frange = (/ -0.01, 1.01 /)
+
+    !------ labels for diagnostics -------
+    iref = int(z_ref_mom+0.5)
+    if ( real(iref) == z_ref_mom ) then
+       write (label_zm,105) iref
+       if (iref < 10) write (label_zm,100) iref
+    else
+       write (label_zm,110) z_ref_mom
+    endif
+
+    iref = int(z_ref_heat+0.5)
+    if ( real(iref) == z_ref_heat ) then
+       write (label_zh,105) iref
+       if (iref < 10) write (label_zh,100) iref
+    else
+       write (label_zh,110) z_ref_heat
+    endif
+
+100 format (i1,' m',3x)
+105 format (i2,' m',2x)
+110 format (f4.1,' m')
+
+   id_un_ref      = &
+         fms_diag_register_diag_field ( mod_name, 'un_ref',      atmos_axes, Time, &
+         'neutral zonal wind component at '//label_zm,  'm/s',   range=vrange )
+
+   id_vn_ref      = &
+         fms_diag_register_diag_field ( mod_name, 'vn_ref',      atmos_axes, Time, &
+         'neutral meridional wind component at '//label_zm, 'm/s', range=vrange )
+
+   id_hs_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'hs_wav',      atmos_axes, Time, &
+         'significant wave height from wave model',   'm'   )
+
+   id_ust_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'ust_wav',     atmos_axes, Time, &
+         'friction velocity from wave model',   'm/s'   )
+
+   id_ustdir_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'ustdir_wav',  atmos_axes, Time, &
+         'Direction of friction velocity from wave model',   'radians'   )
+
+   id_charn_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'charn_wav',   atmos_axes, Time, &
+         'charnock parameter from wave model',   'dimensionless'   )
+
+  end subroutine diag_wave_field_init 
 
 end module atm_ice_wave_exchange_mod

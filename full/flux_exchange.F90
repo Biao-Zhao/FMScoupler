@@ -762,8 +762,8 @@ contains
     call fms_mpp_set_current_pelist()
     call ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state, Wav, ice_ocean_boundary, ocean_ice_boundary, &
          Dt_cpl, debug_stocks, do_area_weighted_flux, ex_gas_fields_ice, ex_gas_fluxes, do_ocean, slow_ice_ocean_pelist)
-    if (Wav%Waves_Is_Init) call atm_wave_exchange_init(Atm, Wav, Atmos_wave_boundary)
-    if (Wav%Waves_Is_Init) call ice_wave_exchange_init(Ice, Wav, Ice_wave_boundary)
+    if (Wav%Waves_Is_Init) call atm_wave_exchange_init(Time, Atm, Wav, Atmos_wave_boundary, z_ref_heat, z_ref_mom)
+    if (Wav%Waves_Is_Init) call ice_wave_exchange_init(Time, Ice, Wav, Ice_wave_boundary)
 
     !---- done ----
     do_init = .false.

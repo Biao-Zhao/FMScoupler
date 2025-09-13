@@ -114,9 +114,7 @@ use FMSconstants, only: rdgas, rvgas, cp_air, stefan, WTMAIR, HLV, HLF, Radius, 
              id_t_ca,   id_q_surf, id_q_atm, id_z_atm, id_p_atm, id_gust, &
              id_t_ref_land, id_rh_ref_land, id_u_ref_land, id_v_ref_land, &
              id_q_ref,  id_q_ref_land, id_q_flux_land, id_rh_ref_cmip, &
-             id_hussLut_land, id_tasLut_land, id_t_flux_land,         &
-             id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav,      &
-             id_un_ref, id_vn_ref
+             id_hussLut_land, id_tasLut_land, id_t_flux_land
   integer :: id_co2_atm_dvmr, id_co2_surf_dvmr
 ! 2017/08/15 jgj added
   integer :: id_co2_bot, id_co2_flux_pcair_atm, id_o2_flux_pcair_atm
@@ -303,7 +301,7 @@ contains
                                              do_forecast_in, partition_fprec_from_lprec_in, scale_precip_2d_in, &
                                              nblocks_in, cplClock_in, ex_gas_fields_atm_in, &
                                              ex_gas_fields_ice_in, ex_gas_fluxes_in)
-    type(FmsTime_type),                   intent(in)    :: Time !< The model's current time
+    type(FmsTime_type),                intent(in)    :: Time !< The model's current time
     type(atmos_data_type),             intent(inout) :: Atm  !< A derived data type to specify atmosphere boundary data
     type(land_data_type),              intent(in)    :: Land !< A derived data type to specify land boundary data
     type(ice_data_type),               intent(inout) :: Ice  !< A derived data type to specify ice boundary data
@@ -1534,8 +1532,8 @@ contains
 
     call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%u_ref, 'ATM', ex_ref_u     , xmap_sfc, complete=.false.) !bqx
     call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%v_ref, 'ATM', ex_ref_v     , xmap_sfc, complete=.false.) !bqx
-    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%un_ref, 'ATM', ex_ref_un   , xmap_sfc, complete=.false.)
-    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%vn_ref, 'ATM', ex_ref_vn   , xmap_sfc, complete=.true.) 
+    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%un_ref,'ATM', ex_ref_un    , xmap_sfc, complete=.false.)
+    call fms_xgrid_get_from_xgrid (Land_Ice_Atmos_Boundary%vn_ref,'ATM', ex_ref_vn    , xmap_sfc, complete=.true.) 
 
 ! kgao: for shield+mom6 coupling; used by shield pbl schemes (am5 with tke-edmf should do the same)
 #ifndef use_AM3_physics
@@ -2068,38 +2066,6 @@ contains
        call fms_xgrid_get_from_xgrid (diag_atm, 'ATM',&
             (log(ex_z_atm/ex_rough_mom+1.0)/log(ex_z_atm/ex_rough_scale+1.0))**2, xmap_sfc)
        used = fms_diag_send_data(id_rough_scale, diag_atm, Time)
-    endif
-
-    !    ------ neutral wind speed at reference level ----
-    if ( id_un_ref > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Unref_atm, xmap_atm_wav)
-       used = fms_diag_send_data ( id_un_ref, diag_atm, Time )
-    endif
-
-    if ( id_vn_ref > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Vnref_atm, xmap_atm_wav)
-       used = fms_diag_send_data ( id_vn_ref, diag_atm, Time )
-    endif
-
-    !    ------- output diagnostic variables from wave, added by Biao-----------
-    if ( id_hs_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_hs_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_hs_wav, diag_atm, Time )
-    endif
-
-    if ( id_ust_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ust_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_ust_wav, diag_atm, Time )
-    endif
-
-    if ( id_ustdir_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_ustdir_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_ustdir_wav, diag_atm, Time )
-    endif
-
-    if ( id_charn_wav > 0 ) then
-       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_charn_wav, xmap_atm_wav)
-       used = fms_diag_send_data ( id_charn_wav, diag_atm, Time )
     endif
 
     !Balaji
@@ -3714,22 +3680,6 @@ contains
          fms_diag_register_diag_field ( mod_name, 'q_star',     atmos_axes, Time, &
          'moisture scale',      'kg water/kg air'   )
 
-    id_hs_wav     = &
-         fms_diag_register_diag_field ( mod_name, 'hs_wav',     atmos_axes, Time, &
-         'significant wave height from wave model',   'm'   )
-
-    id_ust_wav     = &
-         fms_diag_register_diag_field ( mod_name, 'ust_wav',     atmos_axes, Time, &
-         'friction velocity from wave model',   'm/s'   )
-
-    id_ustdir_wav     = &
-         fms_diag_register_diag_field ( mod_name, 'ustdir_wav',     atmos_axes, Time, &
-         'Direction of friction velocity from wave model',   'radians'   )
-
-    id_charn_wav     = &
-         fms_diag_register_diag_field ( mod_name, 'charn_wav',     atmos_axes, Time, &
-         'charnock parameter from wave model',   'dimensionless'   )
-
     id_thv_atm = &
          fms_diag_register_diag_field ( mod_name, 'thv_atm', atmos_axes, Time, &
          'surface air virtual potential temperature', 'K')
@@ -3824,16 +3774,6 @@ contains
     id_v_ref      = &
          fms_diag_register_diag_field ( mod_name, 'v_ref',      atmos_axes, Time,     &
          'meridional wind component at '//label_zm, 'm/s', &
-         range=vrange )
-
-    id_un_ref      = &
-         fms_diag_register_diag_field ( mod_name, 'un_ref',      atmos_axes, Time, &
-         'neutral zonal wind component at '//label_zm,  'm/s', &
-         range=vrange )
-
-    id_vn_ref      = &
-         fms_diag_register_diag_field ( mod_name, 'vn_ref',      atmos_axes, Time,     &
-         'neutral meridional wind component at '//label_zm, 'm/s', &
          range=vrange )
 
     id_wind_ref = &
