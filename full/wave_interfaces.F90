@@ -48,7 +48,7 @@ module atm_ice_wave_exchange_mod
   real    :: Dt_cpl
   
   character(len=4), parameter :: mod_name = 'flux'
-  integer :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref
+  integer :: id_hs_wav, id_ust_wav, id_ustdir_wav, id_charn_wav, id_un_ref, id_vn_ref, id_landmask_wav
   real    :: z_ref_heat =  2. !< Reference height (meters) for temperature and relative humidity diagnostics
                               !! (t_ref, rh_ref, del_h, del_q)
   real    :: z_ref_mom  = 10. !< Reference height (meters) for mementum diagnostics (u_ref, v_ref, del_m)
@@ -88,6 +88,7 @@ contains
     allocate( Wav%ust_wav(is:ie,js:je,1) )
     allocate( Wav%ustdir_wav(is:ie,js:je,1) )
     allocate( Wav%charn_wav(is:ie,js:je,1) )
+    allocate( wav%landmask(is:ie,js:je,1) )
 
     atmos_wave_boundary%wavgrd_u10_mpp(:,:,:) = 0.0
     atmos_wave_boundary%wavgrd_v10_mpp(:,:,:) = 0.0
@@ -96,6 +97,7 @@ contains
     Wav%ust_wav(:,:,1) = 0.0
     Wav%ustdir_wav(:,:,1) = 0.0
     Wav%charn_wav(:,:,1) = 0.0
+    wav%landmask(:,:,1) =3.0
 
 
   end subroutine atm_wave_exchange_init
@@ -164,7 +166,8 @@ contains
          ex_hs_wav,       &
          ex_ust_wav,      &
          ex_ustdir_wav,   &
-         ex_charn_wav
+         ex_charn_wav,    &
+         ex_landmask_wav
 
 
     integer :: remap_method
@@ -179,6 +182,7 @@ contains
     ex_ust_wav    = 0.0
     ex_ustdir_wav = 0.0
     ex_charn_wav  = 0.0
+    ex_landmask_wav  = 0.0
 
     !> Put atmospheric variables onto exchange grid, modified by Biao
     call fms_xgrid_put_to_xgrid (land_ice_atmos_boundary%un_ref , 'ATM', ex_Unref_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
@@ -189,6 +193,7 @@ contains
     call fms_xgrid_put_to_xgrid (Wav%ust_wav, 'WAV', ex_ust_wav , xmap_atm_wav)
     call fms_xgrid_put_to_xgrid (Wav%ustdir_wav, 'WAV', ex_ustdir_wav , xmap_atm_wav) 
     call fms_xgrid_put_to_xgrid (Wav%charn_wav, 'WAV', ex_charn_wav , xmap_atm_wav)
+    call fms_xgrid_put_to_xgrid (Wav%landmask, 'WAV', ex_landmask_wav , xmap_atm_wav)
 
     if (Wav%pe) then
        call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10_mpp, 'WAV', ex_Unref_atm, xmap_atm_wav)
@@ -225,6 +230,12 @@ contains
     if ( id_vn_ref > 0 ) then
        call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_Vnref_atm, xmap_atm_wav)
        used = fms_diag_send_data ( id_vn_ref, diag_atm, Time )
+    endif
+    
+    !    ----- landmask from wave model -------
+    if ( id_landmask_wav > 0 ) then
+       call fms_xgrid_get_from_xgrid (diag_atm, 'ATM', ex_landmask_wav, xmap_atm_wav)
+       used = fms_diag_send_data ( id_landmask_wav, diag_atm, Time )
     endif
 
 
@@ -372,6 +383,10 @@ contains
    id_charn_wav     = &
          fms_diag_register_diag_field ( mod_name, 'charn_wav',   atmos_axes, Time, &
          'charnock parameter from wave model',   'dimensionless'   )
+
+   id_landmask_wav     = &
+         fms_diag_register_diag_field ( mod_name, 'landmask_wav',   atmos_axes, Time, &
+         'landmask from wave, 0 land, 1 sea',   'dimensionless'   )
 
   end subroutine diag_wave_field_init 
 
